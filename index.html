@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ca">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gestor de tasques</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1d2330; --muted:#778; --accent:#3b6cf6; --border:#e1e4ea; --danger:#d33; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171d; --card:#1e232c; --text:#e8eaf0; --muted:#99a; --accent:#6c93ff; --border:#2e3440; --danger:#ff6b6b; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width: 520px; margin: 0 auto; padding: 32px 16px; }
+  h1 { font-size: 1.5rem; margin: 0 0 16px; }
+  form { display:flex; gap:8px; margin-bottom:16px; }
+  #auth form { flex-direction:column; }
+  input[type=text], input[type=email], input[type=password] { flex:1; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--card); color:var(--text); font-size:1rem; }
+  button { padding:10px 14px; border:0; border-radius:8px; background:var(--accent); color:#fff; font-size:1rem; cursor:pointer; }
+  button.link { background:none; color:var(--accent); padding:4px 0; font-size:.95rem; }
+  ul { list-style:none; margin:0; padding:0; }
+  li { display:flex; align-items:center; gap:10px; background:var(--card); border:1px solid var(--border); border-radius:8px; padding:10px 12px; margin-bottom:8px; }
+  li span { flex:1; word-break: break-word; }
+  li.done span { text-decoration: line-through; color:var(--muted); }
+  li button { background:none; color:var(--danger); padding:4px 8px; }
+  header { display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; }
+  header h1 { margin:0; }
+  header small { color:var(--muted); display:block; font-size:.8rem; }
+  .estat { color:var(--muted); font-size:.9rem; margin-top:12px; }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<main>
+  <!-- Pantalla d'accés -->
+  <section id="auth" class="hidden">
+    <h1>🔐 Accedeix</h1>
+    <form id="form-auth">
+      <input type="email" id="email" placeholder="Correu electrònic" required autocomplete="email">
+      <input type="password" id="password" placeholder="Contrasenya (mín. 6 caràcters)" required minlength="6" autocomplete="current-password">
+      <button type="submit" id="btn-auth">Inicia sessió</button>
+    </form>
+    <button class="link" id="canvia-mode" type="button">No tens compte? Registra't</button>
+    <p class="estat" id="estat-auth"></p>
+  </section>
+
+  <!-- Aplicació -->
+  <section id="app" class="hidden">
+    <header>
+      <div><h1>📝 Les meves tasques</h1><small id="usuari"></small></div>
+      <button class="link" id="sortir">Tanca sessió</button>
+    </header>
+    <form id="form">
+      <input type="text" id="titol" placeholder="Nova tasca..." required autocomplete="off">
+      <button type="submit">Afegeix</button>
+    </form>
+    <ul id="llista"></ul>
+    <p class="estat" id="estat"></p>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+  // Canvia aquests dos valors pels del teu projecte (Supabase → Project Settings → API)
+  const SUPABASE_URL = 'https://mbruybryuxbbfbzfratg.supabase.co';
+  const SUPABASE_ANON_KEY = 'sb_publishable_HYaxv5q2XCdiD7z46pnsuQ_pfDO5MAF';
+
+  const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const $ = id => document.getElementById(id);
+  let modeRegistre = false;
+
+  // ---------- Autenticació ----------
+  $('canvia-mode').onclick = () => {
+    modeRegistre = !modeRegistre;
+    $('btn-auth').textContent = modeRegistre ? 'Crea el compte' : 'Inicia sessió';
+    $('canvia-mode').textContent = modeRegistre ? 'Ja tens compte? Inicia sessió' : "No tens compte? Registra't";
+    $('password').autocomplete = modeRegistre ? 'new-password' : 'current-password';
+    $('estat-auth').textContent = '';
+  };
+
+  $('form-auth').addEventListener('submit', async e => {
+    e.preventDefault();
+    const creds = { email: $('email').value.trim(), password: $('password').value };
+    $('estat-auth').textContent = '...';
+    if (modeRegistre) {
+      const { data, error } = await sb.auth.signUp(creds);
+      if (error) { $('estat-auth').textContent = 'Error: ' + error.message; return; }
+      if (!data.session) $('estat-auth').textContent = 'Compte creat! Revisa el correu per confirmar-lo i després inicia sessió.';
+    } else {
+      const { error } = await sb.auth.signInWithPassword(creds);
+      if (error) $('estat-auth').textContent = 'Error: ' + error.message;
+    }
+  });
+
+  $('sortir').onclick = () => sb.auth.signOut();
+
+  // Es dispara en carregar la pàgina i cada cop que s'inicia o tanca sessió
+  sb.auth.onAuthStateChange((_event, session) => {
+    const dins = !!session;
+    $('auth').classList.toggle('hidden', dins);
+    $('app').classList.toggle('hidden', !dins);
+    if (dins) { $('usuari').textContent = session.user.email; carregar(); }
+    else { $('llista').innerHTML = ''; }
+  });
+
+  // ---------- Tasques ----------
+  async function carregar() {
+    const { data, error } = await sb.from('tasks').select('*').order('created_at', { ascending: false });
+    if (error) { $('estat').textContent = 'Error: ' + error.message; return; }
+    const llista = $('llista');
+    llista.innerHTML = '';
+    data.forEach(t => {
+      const li = document.createElement('li');
+      if (t.done) li.className = 'done';
+
+      const check = document.createElement('input');
+      check.type = 'checkbox';
+      check.checked = t.done;
+      check.onchange = () => canviar(t.id, check.checked);
+
+      const text = document.createElement('span');
+      text.textContent = t.title;
+
+      const del = document.createElement('button');
+      del.textContent = '✕';
+      del.title = 'Elimina';
+      del.onclick = () => eliminar(t.id);
+
+      li.append(check, text, del);
+      llista.append(li);
+    });
+    $('estat').textContent = data.length ? '' : 'Encara no tens cap tasca.';
+  }
+
+  async function afegir(title) {
+    // user_id s'omple sol a la base de dades (default auth.uid())
+    const { error } = await sb.from('tasks').insert({ title });
+    if (error) $('estat').textContent = 'Error: ' + error.message;
+    carregar();
+  }
+
+  async function canviar(id, done) {
+    await sb.from('tasks').update({ done }).eq('id', id);
+    carregar();
+  }
+
+  async function eliminar(id) {
+    await sb.from('tasks').delete().eq('id', id);
+    carregar();
+  }
+
+  $('form').addEventListener('submit', e => {
+    e.preventDefault();
+    const valor = $('titol').value.trim();
+    if (valor) { afegir(valor); $('titol').value = ''; }
+  });
+</script>
+</body>
+</html>
